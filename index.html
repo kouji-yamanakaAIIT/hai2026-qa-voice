@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HAI2026 日英Q&A 音声練習</title>
+<style>
+:root {
+  --bg: #f3f6f8; --surface: #fff; --fg: #16232b; --muted: #5b6b75;
+  --line: #d5dee4; --accent: #0b6e8a; --soft: #e0f0f5; --rec: #c2412d;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0f171c; --surface: #172229; --fg: #e3ecf0; --muted: #93a5ae;
+          --line: #2a3a43; --accent: #5cc0db; --soft: #1b3440; --rec: #ef7a63; color-scheme: dark; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg);
+  font-family: "Hiragino Sans", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+  font-size: 15px; line-height: 1.7; padding: 24px 16px 48px; }
+main { max-width: 820px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+h1 { font-size: 1.25rem; margin: 0; }
+h2 { font-size: .95rem; margin: 0 0 8px; color: var(--accent); }
+.box { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+.voice label { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+select { font: inherit; font-size: .85rem; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; width: 100%; }
+input, textarea { font: inherit; color: var(--fg); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; width: 100%; }
+textarea { min-height: 80px; resize: vertical; font-size: 1rem; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+.grow { flex: 1; }
+button { font: inherit; font-size: .95rem; cursor: pointer; border-radius: 6px; padding: 9px 16px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--fg); }
+button:hover { border-color: var(--accent); }
+button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 700; }
+button.live { border-color: var(--rec); color: var(--rec); font-weight: 700; }
+button.on { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+button:disabled { opacity: .45; cursor: default; }
+#status { font-size: .82rem; color: var(--muted); }
+#status.err { color: var(--rec); }
+#reply { white-space: pre-wrap; min-height: 120px; margin: 0; font-size: .95rem; }
+#reply.empty { color: var(--muted); }
+.speak { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+.speak button { padding: 12px; font-size: 1rem; }
+.voice { font-size: .78rem; color: var(--muted); margin-top: 6px; }
+details { font-size: .85rem; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>HAI2026 日英Q&amp;A 音声練習</h1>
+
+  <!-- 1. 音声認識 → 文字起こし -->
+  <section class="box">
+    <h2>① 質問（音声認識で文字起こし）</h2>
+    <textarea id="q" placeholder="🎤を押して話すと、ここに文字が出ます。直接入力もできます"></textarea>
+    <div class="row">
+      <button id="micJa">🎤 日本語で話す</button>
+      <button id="micEn">🎤 Speak English</button>
+      <label style="font-size:.85rem;color:var(--muted)"><input type="checkbox" id="auto" checked style="width:auto"> 話し終えたら自動送信</label>
+      <span class="grow"></span>
+      <button class="primary" id="send">送信</button>
+    </div>
+    <div class="row"><span id="status">準備OK</span></div>
+  </section>
+
+  <!-- 2. Difyの返事を表示 -->
+  <section class="box">
+    <h2>② Difyからの回答</h2>
+    <pre id="reply" class="empty">ここに回答が表示されます。</pre>
+
+    <!-- 3. 発話ボタン -->
+    <div class="speak">
+      <button id="sayEn" disabled>🔊 英語の回答を読む</button>
+      <button id="sayJa" disabled>🔊 日本語の回答を読む</button>
+    </div>
+    <div class="speak voice">
+      <label>英語の声 <select id="voiceEn"></select></label>
+      <label>日本語の声 <select id="voiceJa"></select></label>
+    </div>
+  </section>
+
+  <details class="box">
+    <summary>設定（Dify APIキー）</summary>
+    <div class="row">
+      <input type="password" id="key" placeholder="app-…" autocomplete="off">
+      <button id="reset">新しい会話にする</button>
+    </div>
+  </details>
+</main>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const API = "https://api.dify.ai/v1/chat-messages";
+  const ls = { get: (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } },
+               set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} } };
+  const status = (m, err) => { $("status").textContent = m; $("status").className = err ? "err" : ""; };
+  const key = $("key"), q = $("q");
+  key.value = ls.get("hai_key") || "";
+  if (!key.value) document.querySelector("details").open = true;
+  key.onchange = () => ls.set("hai_key", key.value.trim());
+
+  /* ================= 発話（ブラウザの声） =================
+     一番きれいに聞こえる声を自動で選ぶ:
+       Edge の Natural（ニューラル）> Online > Google > 高品質(Enhanced/Premium) > その他 */
+  const synth = window.speechSynthesis;
+  const TUNE = {
+    en: { lang: "en-US", rate: 0.95, pitch: 1.0, read: [["HAI", "H A I"], ["Q&A", "Q and A"]] },
+    ja: { lang: "ja-JP", rate: 1.0,  pitch: 1.0, read: [["HAI", "ハイ"], ["RAG", "ラグ"], ["Dify", "ディファイ"], ["Gemini", "ジェミニ"],
+          ["Bedrock", "ベッドロック"], ["LLM", "エルエルエム"], ["PDF", "ピーディーエフ"], ["AI", "エーアイ"], ["Q&A", "キューアンドエー"]] },
+  };
+  const voices = { en: null, ja: null };
+  // Mac の効果音用の声（かすれ声・ささやき・歌声など）は使わない
+  const NOVELTY = /^(Albert|Bad News|Bahh|Bells|Boing|Bubbles|Cellos|Deranged|Good News|Hysterical|Jester|Organ|Pipe Organ|Superstar|Trinoids|Whisper|Wobble|Zarvox|Fred|Junior|Ralph|Kathy|Princess|Vicki|Victoria|Agnes|Bruce|Grandma|Grandpa|Rocko|Eddy|Flo|Reed|Sandy|Shelley)\b/i;
+  // Mac で聞きやすい標準の声
+  const GOOD_MAC = /^(Samantha|Ava|Allison|Alex|Tom|Susan|Zoe|Evan|Nathan|Noelle|Joelle|Nicky|Karen|Daniel|Moira|Serena|Kyoko|Otoya|O-ren|Hattori)\b/i;
+  // ネット経由の Google の声は、Mac では途中で別の声に切り替わりやすいので本体の声を優先する
+  const rank = (v, l) => (/Natural/i.test(v.name) ? 0 : /Premium|Enhanced|プレミアム|拡張/i.test(v.name) ? 1
+      : GOOD_MAC.test(v.name) ? 2 : /Online/i.test(v.name) ? 3 : /Google/.test(v.name) ? 4 : 6)
+    + (l === "en" && !/en[-_]US/i.test(v.lang) ? 0.5 : 0);
+  function chooseVoices() {
+    const all = synth.getVoices().filter((v) => !NOVELTY.test(v.name));
+    for (const l of ["en", "ja"]) {
+      const list = all.filter((v) => v.lang.toLowerCase().startsWith(l)).sort((a, b) => rank(a, l) - rank(b, l));
+      const sel = $(l === "en" ? "voiceEn" : "voiceJa");
+      sel.innerHTML = "";
+      list.forEach((v) => { const o = document.createElement("option"); o.value = v.name; o.textContent = v.name; sel.appendChild(o); });
+      const saved = list.find((v) => v.name === ls.get("hai_voice_" + l));
+      voices[l] = saved || list[0] || null;
+      if (voices[l]) sel.value = voices[l].name;
+      sel.onchange = () => { voices[l] = list.find((v) => v.name === sel.value) || null; ls.set("hai_voice_" + l, sel.value); };
+    }
+  }
+  if (synth) { chooseVoices(); synth.onvoiceschanged = chooseVoices; }
+
+  // 文ごとに区切って読む（長文が途中で止まるのを防ぎ、自然な間を入れる）
+  const sentences = (t, l) => (l === "ja"
+      ? t.match(/[^。！？\n]+[。！？]?/g) || []
+      : t.split(/(?<=[.!?])\s+(?=[A-Z0-9"(])|\n+/)).map((s) => s.trim()).filter(Boolean);
+
+  let speakingBtn = null;
+  function stopSpeak() {
+    if (synth) synth.cancel();
+    if (speakingBtn) { speakingBtn.classList.remove("on"); speakingBtn.textContent = speakingBtn.dataset.label; speakingBtn = null; }
+  }
+  function speak(text, l, btn) {
+    if (!synth) return status("このブラウザは読み上げに対応していません", true);
+    const same = speakingBtn === btn; stopSpeak(); if (same) return;
+    const t = TUNE[l];
+    // 全角英数字・記号を半角にそろえる（混ざると声が切り替わる原因になる）
+    text = text.normalize("NFKC");
+    if (l === "en") {
+      text = text
+        .replace(/[「」『』“”]/g, '"').replace(/[‘’]/g, "'")
+        .replace(/[、]/g, ", ").replace(/[。]/g, ". ")
+        .replace(/[぀-ヿ㐀-鿿ｦ-ﾟ]+/g, " ")  // 英語の中の日本語は読まない
+        .replace(/\(\s*\)|\[\s*\]|"\s*"/g, "")                          // 中身が消えたかっこを消す
+        .replace(/[–—―]/g, ", ").replace(/[*_#`]/g, "")
+        .replace(/\s{2,}/g, " ");
+    }
+    for (const [a, b] of t.read) text = text.split(a).join(b);
+    const list = sentences(text, l);
+    if (!list.length) return status(l === "en" ? "英語の回答がありません" : "日本語の回答がありません", true);
+    speakingBtn = btn; btn.classList.add("on"); btn.textContent = "■ 停止";
+    list.forEach((s, i) => {
+      const u = new SpeechSynthesisUtterance(s);
+      // 言語は選んだ声と同じにする（ずれると途中で別の声に切り替わることがある）
+      u.lang = voices[l] ? voices[l].lang : t.lang; u.rate = t.rate; u.pitch = t.pitch; u.volume = 1;
+      if (voices[l]) u.voice = voices[l];
+      if (i === list.length - 1) u.onend = () => { if (speakingBtn === btn) stopSpeak(); };
+      synth.speak(u);
+    });
+  }
+  $("sayEn").dataset.label = $("sayEn").textContent;
+  $("sayJa").dataset.label = $("sayJa").textContent;
+
+  /* ================= 音声認識 → 文字起こし ================= */
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let rec = null;
+  function listen(btn, lang) {
+    if (!SR) return status("音声認識は Chrome か Edge で使えます", true);
+    if (rec) { rec.stop(); return; }
+    stopSpeak();
+    rec = new SR(); rec.lang = lang; rec.interimResults = true; rec.continuous = false;
+    let fixed = "";
+    q.value = "";
+    rec.onresult = (e) => {
+      let tmp = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) fixed += e.results[i][0].transcript; else tmp += e.results[i][0].transcript;
+      }
+      q.value = fixed + tmp;
+    };
+    rec.onerror = (e) => status(e.error === "not-allowed"
+        ? (window.top !== window ? "プレビュー画面ではマイクが使えません。ファイルをダウンロードして Edge か Chrome で開いてください"
+          : location.protocol === "file:" ? "ファイルを直接開くとマイクが使えない場合があります。http://localhost で開いてください"
+          : "マイクがブロックされています。アドレスバー左のアイコンからマイクを「許可」にして再読み込みしてください")
+      : e.error === "no-speech" ? "音声が聞き取れませんでした" : "音声認識エラー: " + e.error, true);
+    rec.onend = () => {
+      btn.classList.remove("live"); rec = null;
+      if (fixed.trim()) { status("文字起こしできました"); if ($("auto").checked) send(); }
+    };
+    btn.classList.add("live");
+    status(lang === "ja-JP" ? "聞いています…（もう一度押すと終了）" : "Listening… (press again to stop)");
+    rec.start();
+  }
+  $("micJa").onclick = () => listen($("micJa"), "ja-JP");
+  $("micEn").onclick = () => listen($("micEn"), "en-US");
+
+  /* ================= Dify に送って回答を表示 ================= */
+  let conv = "", answers = { en: "", ja: "" };
+  const user = ls.get("hai_user") || "practice-" + Math.random().toString(36).slice(2, 10);
+  ls.set("hai_user", user);
+  $("reset").onclick = () => { conv = ""; status("新しい会話にしました"); };
+
+  // 「## Answer」「## 回答」の見出しの下だけを取り出す
+  const section = (text, name) => {
+    const m = new RegExp(`^##\\s*${name}\\s*$([\\s\\S]*?)(?=^##\\s|$(?![\\s\\S]))`, "m").exec(text);
+    return m ? m[1].trim() : "";
+  };
+
+  let busy = false;
+  async function send() {
+    const query = q.value.trim();
+    if (!query || busy) return;
+    if (!key.value.trim()) { document.querySelector("details").open = true; key.focus(); return status("設定で Dify APIキーを入れてください", true); }
+    busy = true; $("send").disabled = true; stopSpeak();
+    $("sayEn").disabled = $("sayJa").disabled = true;
+    const reply = $("reply"); reply.className = "empty"; reply.textContent = "回答を作成中…（10〜30秒ほど）";
+    status("Dify に問い合わせ中…");
+    let text = "";
+    try {
+      const res = await fetch(API, { method: "POST",
+        headers: { Authorization: "Bearer " + key.value.trim(), "Content-Type": "application/json" },
+        body: JSON.stringify({ inputs: {}, query, response_mode: "streaming", conversation_id: conv, user }) });
+      if (!res.ok) throw new Error(res.status === 401 ? "APIキーが正しくありません" : `Dify のエラー (${res.status})`);
+      const reader = res.body.getReader(), dec = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { value, done } = await reader.read(); if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf("\n\n")) >= 0) {
+          const line = buf.slice(0, i).split("\n").find((l) => l.startsWith("data:")); buf = buf.slice(i + 2);
+          if (!line) continue;
+          let ev; try { ev = JSON.parse(line.slice(5)); } catch (e) { continue; }
+          if (ev.conversation_id) conv = ev.conversation_id;
+          if (ev.event === "message") { text += ev.answer || ""; reply.className = ""; reply.textContent = text; }
+          if (ev.event === "error") throw new Error(ev.message || "ワークフローのエラー");
+        }
+      }
+      reply.className = ""; reply.textContent = text || "（空の回答）";
+      answers = { en: section(text, "Answer"), ja: section(text, "回答") };
+      $("sayEn").disabled = !answers.en; $("sayJa").disabled = !answers.ja;
+      status("回答を受け取りました");
+    } catch (e) {
+      reply.className = "empty"; reply.textContent = e instanceof TypeError ? "Dify に接続できません。ネット接続を確認してください" : e.message;
+      status(reply.textContent, true);
+    } finally { busy = false; $("send").disabled = false; }
+  }
+  $("send").onclick = send;
+  q.onkeydown = (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); } };
+
+  // 英語ボタン → 「## Answer」の部分だけ、日本語ボタン → 「## 回答」の部分だけを読む
+  $("sayEn").onclick = () => speak(answers.en, "en", $("sayEn"));
+  $("sayJa").onclick = () => speak(answers.ja, "ja", $("sayJa"));
+})();
+</script>
+</body>
+</html>
