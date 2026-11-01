@@ -47,6 +47,7 @@ details { font-size: .85rem; color: var(--muted); }
 .alert { margin-bottom: 10px; padding: 10px 12px; border: 2px solid var(--rec); border-radius: 6px; }
 .alert-title { color: var(--rec); font-weight: 700; }
 #alertText { margin: 4px 0 0; font-size: .9rem; white-space: pre-wrap; }
+.caution { margin: 8px 0 0; font-size: .8rem; color: var(--muted); border-left: 3px solid var(--line); padding-left: 8px; }
 .trans { margin-top: 10px; padding: 10px 12px; background: var(--soft); border-radius: 6px; }
 .trans-label { font-size: .75rem; font-weight: 700; color: var(--accent); }
 #trans { margin: 2px 0 0; font-size: 1.05rem; white-space: pre-wrap; }
@@ -82,6 +83,7 @@ details { font-size: .85rem; color: var(--muted); }
       <p id="alertText"></p>
     </div>
     <pre id="reply" class="empty">ここに回答が表示されます。</pre>
+    <p id="caution" class="caution" hidden></p>
 
     <!-- 3. 発話ボタン -->
     <div class="speak">
@@ -269,7 +271,7 @@ details { font-size: .85rem; color: var(--muted); }
     $("sayEn").disabled = $("sayJa").disabled = true;
     const reply = $("reply"); reply.className = "empty"; reply.textContent = "回答を作成中…（10〜30秒ほど）";
     $("transBox").hidden = false; $("trans").textContent = "訳しています…";
-    $("alert").hidden = true;
+    $("alert").hidden = true; $("caution").hidden = true;
     // 「## 質問の訳」は①に出し、②には残りだけを出す
     const show = (t) => {
       const tr = section(t, "質問の訳");
@@ -309,6 +311,10 @@ details { font-size: .85rem; color: var(--muted); }
         rest = rest.replace(/^##\s*発表者への通知\s*$[\s\S]*?(?=^##\s)/m, "").trim();
         beep(); status("資料に答えがありません。「現在検討中」と答えてください", true);
       }
+      // 暫定版の注意は②の下に小さく出す
+      const caution = section(rest, "注意");
+      $("caution").hidden = !caution; $("caution").textContent = caution ? "⚠ " + caution : "";
+      rest = rest.replace(/^##\s*注意\s*$[\s\S]*$/m, "").trim();
       reply.className = ""; reply.textContent = rest || text || "（空の回答）";
       answers = { en: section(text, "Answer"), ja: section(text, "回答") };
       $("sayEn").disabled = !answers.en; $("sayJa").disabled = !answers.ja;
@@ -328,4 +334,5 @@ details { font-size: .85rem; color: var(--muted); }
 </script>
 </body>
 </html>
+
 
