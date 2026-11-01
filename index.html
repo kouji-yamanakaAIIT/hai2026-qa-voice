@@ -44,6 +44,12 @@ button:disabled { opacity: .45; cursor: default; }
 .speak button { padding: 12px; font-size: 1rem; }
 .voice { font-size: .78rem; color: var(--muted); margin-top: 6px; }
 details { font-size: .85rem; color: var(--muted); }
+.alert { margin-bottom: 10px; padding: 10px 12px; border: 2px solid var(--rec); border-radius: 6px; }
+.alert-title { color: var(--rec); font-weight: 700; }
+#alertText { margin: 4px 0 0; font-size: .9rem; white-space: pre-wrap; }
+.trans { margin-top: 10px; padding: 10px 12px; background: var(--soft); border-radius: 6px; }
+.trans-label { font-size: .75rem; font-weight: 700; color: var(--accent); }
+#trans { margin: 2px 0 0; font-size: 1.05rem; white-space: pre-wrap; }
 </style>
 </head>
 <body>
@@ -61,12 +67,20 @@ details { font-size: .85rem; color: var(--muted); }
       <span class="grow"></span>
       <button class="primary" id="send">送信</button>
     </div>
+    <div class="trans" id="transBox" hidden>
+      <div class="trans-label">質問の訳</div>
+      <p id="trans"></p>
+    </div>
     <div class="row"><span id="status">準備OK</span></div>
   </section>
 
   <!-- 2. Difyの返事を表示 -->
   <section class="box">
     <h2>② Difyからの回答</h2>
+    <div class="alert" id="alert" hidden>
+      <div class="alert-title">⚠ 資料に答えがありません（現在検討中と答えてください）</div>
+      <p id="alertText"></p>
+    </div>
     <pre id="reply" class="empty">ここに回答が表示されます。</pre>
 
     <!-- 3. 発話ボタン -->
@@ -84,8 +98,10 @@ details { font-size: .85rem; color: var(--muted); }
     <summary>設定（Dify APIキー）</summary>
     <div class="row">
       <input type="password" id="key" placeholder="app-…" autocomplete="off">
+      <button id="forget">保存したキーを消す</button>
       <button id="reset">新しい会話にする</button>
     </div>
+    <div class="row"><span id="keyState"></span></div>
   </details>
 </main>
 
@@ -97,9 +113,16 @@ details { font-size: .85rem; color: var(--muted); }
                set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} } };
   const status = (m, err) => { $("status").textContent = m; $("status").className = err ? "err" : ""; };
   const key = $("key"), q = $("q");
+  // APIキーはこのブラウザの中（localStorage）にだけ保存する。外部には送らない（Dify への問い合わせを除く）
+  const keyState = () => {
+    let saved = false; try { saved = !!localStorage.getItem("hai_key"); } catch (e) {}
+    $("keyState").textContent = saved ? "このブラウザに保存済み" : "保存されていません（このブラウザでは保存できない可能性があります）";
+  };
   key.value = ls.get("hai_key") || "";
   if (!key.value) document.querySelector("details").open = true;
-  key.onchange = () => ls.set("hai_key", key.value.trim());
+  key.oninput = () => { ls.set("hai_key", key.value.trim()); keyState(); };   // 入力した時点で保存
+  $("forget").onclick = () => { try { localStorage.removeItem("hai_key"); } catch (e) {} key.value = ""; keyState(); };
+  keyState();
 
   /* ================= 発話（ブラウザの声） =================
      一番きれいに聞こえる声を自動で選ぶ:
@@ -220,14 +243,41 @@ details { font-size: .85rem; color: var(--muted); }
     return m ? m[1].trim() : "";
   };
 
+  // 短い2音の通知音
+  let actx = null;
+  function beep() {
+    try {
+      actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+      [0, 0.25].forEach((t, i) => {
+        const o = actx.createOscillator(), g = actx.createGain();
+        o.frequency.value = i ? 660 : 880; o.connect(g); g.connect(actx.destination);
+        const s = actx.currentTime + t;
+        g.gain.setValueAtTime(0.0001, s); g.gain.exponentialRampToValueAtTime(0.3, s + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, s + 0.2);
+        o.start(s); o.stop(s + 0.22);
+      });
+    } catch (e) {}
+  }
+
   let busy = false;
   async function send() {
+    try { actx = actx || new (window.AudioContext || window.webkitAudioContext)(); actx.resume(); } catch (e) {} // iPad では操作中に音の準備が必要
     const query = q.value.trim();
     if (!query || busy) return;
     if (!key.value.trim()) { document.querySelector("details").open = true; key.focus(); return status("設定で Dify APIキーを入れてください", true); }
     busy = true; $("send").disabled = true; stopSpeak();
     $("sayEn").disabled = $("sayJa").disabled = true;
     const reply = $("reply"); reply.className = "empty"; reply.textContent = "回答を作成中…（10〜30秒ほど）";
+    $("transBox").hidden = false; $("trans").textContent = "訳しています…";
+    $("alert").hidden = true;
+    // 「## 質問の訳」は①に出し、②には残りだけを出す
+    const show = (t) => {
+      const tr = section(t, "質問の訳");
+      if (tr) $("trans").textContent = tr;
+      const rest = t.replace(/^##\s*質問の訳\s*$[\s\S]*?(?=^##\s)/m, "").trim();
+      if (rest && rest !== t.trim()) { reply.className = ""; reply.textContent = rest; }
+      return rest;
+    };
     status("Dify に問い合わせ中…");
     let text = "";
     try {
@@ -246,11 +296,20 @@ details { font-size: .85rem; color: var(--muted); }
           if (!line) continue;
           let ev; try { ev = JSON.parse(line.slice(5)); } catch (e) { continue; }
           if (ev.conversation_id) conv = ev.conversation_id;
-          if (ev.event === "message") { text += ev.answer || ""; reply.className = ""; reply.textContent = text; }
+          if (ev.event === "message") { text += ev.answer || ""; show(text); }
           if (ev.event === "error") throw new Error(ev.message || "ワークフローのエラー");
         }
       }
-      reply.className = ""; reply.textContent = text || "（空の回答）";
+      let rest = show(text);
+      if (!section(text, "質問の訳")) $("transBox").hidden = true;   // 翻訳ノードのない旧ワークフローでも動く
+      // 資料にない質問：発表者に知らせる（赤い枠＋通知音）
+      const notice = section(rest, "発表者への通知");
+      if (notice) {
+        $("alertText").textContent = notice; $("alert").hidden = false;
+        rest = rest.replace(/^##\s*発表者への通知\s*$[\s\S]*?(?=^##\s)/m, "").trim();
+        beep(); status("資料に答えがありません。「現在検討中」と答えてください", true);
+      }
+      reply.className = ""; reply.textContent = rest || text || "（空の回答）";
       answers = { en: section(text, "Answer"), ja: section(text, "回答") };
       $("sayEn").disabled = !answers.en; $("sayJa").disabled = !answers.ja;
       status("回答を受け取りました");
@@ -269,3 +328,4 @@ details { font-size: .85rem; color: var(--muted); }
 </script>
 </body>
 </html>
+
